@@ -17,7 +17,7 @@ import * as cheerio from "cheerio";
 import { SettingsForm } from "./forms";
 import { MainInterceptor } from "./network";
 
-const DOMAIN = "https://digitalteam.org";
+const DOMAIN = "https://dgtread.com";
 
 type DigitalTeamImplementation = Extension &
     MangaProviding &
