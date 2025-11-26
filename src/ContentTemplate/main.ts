@@ -1,377 +1,179 @@
-// TODO:
-// - Fix exclude search
-// - Add the English name to the title view
-// - Add additional info to the title view
-// - Make getChapterDetails only return new chapters
-// - Add content settings support to search
-// - Remove the content.json file and switch to cheerio
-
 import {
     BasicRateLimiter,
     ContentRating,
-    DiscoverSectionType,
-    Form,
-    type Chapter,
-    type ChapterDetails,
-    type ChapterProviding,
-    type DiscoverSection,
-    type DiscoverSectionItem,
-    type DiscoverSectionProviding,
-    type Extension,
-    type MangaProviding,
-    type PagedResults,
-    type SearchFilter,
-    type SearchQuery,
-    type SearchResultItem,
-    type SearchResultsProviding,
-    type SettingsFormProviding,
-    type SourceManga,
-    type Tag,
-    type TagSection,
+    Extension,
+    MangaProviding,
+    ChapterProviding,
+    SearchResultsProviding,
+    SourceManga,
+    Chapter,
+    ChapterDetails,
+    PagedResults,
+    SearchQuery,
+    SearchResultItem,
+    TagSection,
+    Request,
+    Response
 } from "@paperback/types";
-// Template content file
-import content from "./content.json";
-// Extension forms file
-import { SettingsForm } from "./forms";
-// Extension network file
+import * as cheerio from "cheerio"; 
 import { MainInterceptor } from "./network";
+import { SettingsForm } from "./forms";
 
-// Should match the capabilities which you defined in pbconfig.ts
-type ContentTemplateImplementation = SettingsFormProviding &
-    Extension &
-    DiscoverSectionProviding &
-    SearchResultsProviding &
-    MangaProviding &
-    ChapterProviding;
+const DOMAIN = 'https://dgtread.com/';
 
-// Main extension class
-export class ContentTemplateExtension implements ContentTemplateImplementation {
-    // Implementation of the main rate limiter
-    mainRateLimiter = new BasicRateLimiter("main", {
-        numberOfRequests: 15,
-        bufferInterval: 10,
+type DigitalTeamImplementation = Extension & MangaProviding & ChapterProviding & SearchResultsProviding;
+
+export class DigitalTeamExtension implements DigitalTeamImplementation {
+    
+    // Configurazione limiti richieste (per non essere bloccati dal sito)
+    globalRateLimiter = new BasicRateLimiter("main", {
+        numberOfRequests: 4,
+        bufferInterval: 1,
         ignoreImages: true,
     });
 
-    // Implementation of the main interceptor
     mainInterceptor = new MainInterceptor("main");
 
-    // Method from the Extension interface which we implement, initializes the rate limiter, interceptor, discover sections and search filters
     async initialise(): Promise<void> {
-        this.mainRateLimiter.registerInterceptor();
+        this.globalRateLimiter.registerInterceptor();
         this.mainInterceptor.registerInterceptor();
     }
 
-    // Implements the settings form, check SettingsForm.ts for more info
-    async getSettingsForm(): Promise<Form> {
+    async getSettingsForm(): Promise<SettingsForm> {
         return new SettingsForm();
     }
 
-    async getDiscoverSections(): Promise<DiscoverSection[]> {
-        // First template discover section, gets populated by the getDiscoverSectionItems method
-        const discover_section_template1: DiscoverSection = {
-            id: "discover-section-template1",
-            title: "Discover Section Template 1",
-            subtitle: "This is a template",
-            type: DiscoverSectionType.featured,
-        };
+    // 1. OTTENERE DETTAGLI DEL MANGA
+    async getMangaDetails(mangaId: string): Promise<SourceManga> {
+        // Scarica la pagina del manga
+        const response = await fetch(`${DOMAIN}/manga/${mangaId}`);
+        const data = await response.text();
+        const $ = cheerio.load(data);
+        
+        // Estrai i dati usando i selettori CSS
+        const title = $('div.post-title h1').text().trim() || $('h1').text().trim();
+        const image = $('div.summary_image img').attr('src') || '';
+        const author = $('div.author-content').first().text().trim() || 'Unknown';
+        const description = $('div.description-summary p').text().trim() || 'Nessuna descrizione.';
+        
+        let status = 'ONGOING';
+        const statusText = $('div.post-status div.summary-content').text().trim().toLowerCase();
+        if (statusText.includes('complet') || statusText.includes('end')) status = 'COMPLETED';
 
-        // Second template discover section, gets populated by the getDiscoverSectionItems method
-        const discover_section_template2: DiscoverSection = {
-            id: "discover-section-template2",
-            title: "Discover Section Template 2",
-            subtitle: "This is another template",
-            type: DiscoverSectionType.prominentCarousel,
+        return {
+            mangaId: mangaId,
+            mangaInfo: {
+                primaryTitle: title,
+                thumbnailUrl: image,
+                synopsis: description,
+                status: status,
+                author: author,
+                contentRating: ContentRating.MATURE, 
+                shareUrl: `${DOMAIN}/manga/${mangaId}`
+            }
         };
-
-        // Second template discover section, gets populated by the getDiscoverSectionItems method
-        const discover_section_template3: DiscoverSection = {
-            id: "discover-section-template3",
-            title: "Discover Section Template 3",
-            subtitle: "This is yet another template",
-            type: DiscoverSectionType.simpleCarousel,
-        };
-
-        return [
-            discover_section_template1,
-            discover_section_template2,
-            discover_section_template3,
-        ];
     }
 
-    // Populates both the discover sections
-    async getDiscoverSectionItems(
-        section: DiscoverSection,
-        metadata: number | undefined,
-    ): Promise<PagedResults<DiscoverSectionItem>> {
-        void metadata;
+    // 2. OTTENERE LA LISTA DEI CAPITOLI
+    async getChapters(sourceManga: SourceManga): Promise<Chapter[]> {
+        const response = await fetch(`${DOMAIN}/manga/${sourceManga.mangaId}`);
+        const data = await response.text();
+        const $ = cheerio.load(data);
 
-        let i: number = 0;
-        let j: number = 1;
-        let type:
-            | "featuredCarouselItem"
-            | "simpleCarouselItem"
-            | "prominentCarouselItem"
-            | "chapterUpdatesCarouselItem"
-            | "genresCarouselItem";
-        switch (section.id) {
-            case "discover-section-template1":
-                j = 2;
-                type = "featuredCarouselItem";
-                break;
-            case "discover-section-template2":
-                i = content.length / 2;
-                j = 2;
-                type = "prominentCarouselItem";
-                break;
-            case "discover-section-template3":
-                type = "simpleCarouselItem";
-                break;
+        const chapters: Chapter[] = [];
+        const chapterNodes = $('li.wp-manga-chapter');
+
+        let counter = 0;
+        for (const node of chapterNodes) {
+            const titleNode = $(node).find('a');
+            const title = titleNode.text().trim();
+            const url = titleNode.attr('href') ?? '';
+            
+            // L'ID del capitolo è l'ultima parte dell'URL
+            const chapterId = url.split('/').filter(x => x.length > 0).pop();
+
+            if (!chapterId) continue;
+
+            // Cerca il numero nel titolo
+            const chapNumRegex = title.match(/(\d+(\.\d+)?)/);
+            let chapNum = 0;
+            if (chapNumRegex && chapNumRegex[1]) chapNum = Number(chapNumRegex[1]);
+            
+            // Se non trova il numero, usa un contatore
+            if (chapNum === 0) chapNum = counter++;
+
+            chapters.push({
+                chapterId: chapterId,
+                sourceManga: sourceManga,
+                langCode: 'it',
+                chapNum: chapNum,
+                title: title,
+                // time: new Date() // Opzionale
+            });
+        }
+        return chapters;
+    }
+
+    // 3. OTTENERE LE PAGINE DEL CAPITOLO
+    async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
+        const response = await fetch(`${DOMAIN}/manga/${chapter.sourceManga.mangaId}/${chapter.chapterId}/`);
+        const data = await response.text();
+        const $ = cheerio.load(data);
+
+        const pages: string[] = [];
+        const pageNodes = $('div.page-break img');
+
+        for (const page of pageNodes) {
+            let url = $(page).attr('src');
+            if (!url) url = $(page).attr('data-src');
+            
+            if (url) {
+                pages.push(url.trim());
+            }
         }
 
         return {
-            items: Array.from(Array(content.length / j)).map(() => {
-                const result = {
-                    mangaId: content[i]?.titleId,
-                    title: content[i]?.primaryTitle
-                        ? content[i]?.primaryTitle
-                        : "Unknown Title",
-                    subtitle: content[i]?.secondaryTitles[0],
-                    imageUrl: content[i]?.thumbnailUrl
-                        ? content[i]?.thumbnailUrl
-                        : "",
-                    type: type,
-                } as DiscoverSectionItem;
-                ++i;
-                return result;
-            }),
+            id: chapter.chapterId,
+            mangaId: chapter.sourceManga.mangaId,
+            pages: pages
         };
     }
 
-    // Populate search filters
-    async getSearchFilters(): Promise<SearchFilter[]> {
-        return [
-            {
-                id: "search-filter-template",
-                type: "dropdown",
-                options: [
-                    { id: "include", value: "include" },
-                    { id: "exclude", value: "exclude" },
-                ],
-                value: "Exclude",
-                title: "Search Filter Template",
-            },
-        ];
-    }
+    // 4. RICERCA MANGA
+    async getSearchResults(query: SearchQuery, metadata?: any): Promise<PagedResults<SearchResultItem>> {
+        const page = metadata?.page ?? 1;
+        // La ricerca su WordPress/Madara funziona così
+        const searchUrl = `${DOMAIN}/page/${page}/?s=${encodeURIComponent(query.title ?? '')}&post_type=wp-manga`;
 
-    // Populates search
-    async getSearchResults(
-        query: SearchQuery,
-        metadata?: number,
-    ): Promise<PagedResults<SearchResultItem>> {
-        void metadata;
+        const response = await fetch(searchUrl);
+        const data = await response.text();
+        const $ = cheerio.load(data);
 
-        const results: PagedResults<SearchResultItem> = { items: [] };
+        const results: SearchResultItem[] = [];
+        const nodes = $('div.c-tabs-item__content');
 
-        for (let i = 0; i < content.length; i++) {
-            const manga = content[i];
-            if (!manga) continue;
-            if (
-                (manga.primaryTitle
-                    .toLowerCase()
-                    .indexOf(query.title.toLowerCase()) != -1 &&
-                    query.filters[0]?.value == "include") ||
-                (manga.primaryTitle
-                    .toLowerCase()
-                    .indexOf(query.title.toLowerCase()) == -1 &&
-                    query.filters[0]?.value == "exclude")
-            ) {
-                if (manga.titleId) {
-                    const result: SearchResultItem = {
-                        mangaId: manga.titleId,
-                        title: manga.primaryTitle
-                            ? manga.primaryTitle
-                            : "Unknown Title",
-                        subtitle: manga.secondaryTitles[0] ?? "",
-                        imageUrl: manga.thumbnailUrl ? manga.thumbnailUrl : "",
-                    };
-                    results.items.push(result);
-                }
-            } else {
-                for (let j = 0; j < manga.secondaryTitles.length; j++) {
-                    const secondaryTitles = manga.secondaryTitles[j];
-                    if (!secondaryTitles) continue;
-                    if (
-                        (secondaryTitles
-                            .toLowerCase()
-                            .indexOf(query.title.toLowerCase()) != -1 &&
-                            query.filters[0]?.value == "include") ||
-                        (secondaryTitles
-                            .toLowerCase()
-                            .indexOf(query.title.toLowerCase()) == -1 &&
-                            query.filters[0]?.value == "exclude")
-                    ) {
-                        if (manga.titleId) {
-                            const result: SearchResultItem = {
-                                mangaId: manga.titleId,
-                                title: manga.primaryTitle
-                                    ? manga.primaryTitle
-                                    : "Unknown Title",
-                                subtitle: manga.secondaryTitles[0] ?? "",
-                                imageUrl: manga.thumbnailUrl
-                                    ? manga.thumbnailUrl
-                                    : "",
-                            };
-                            results.items.push(result);
-                        }
-                        break;
-                    }
-                }
+        for (const node of nodes) {
+            const titleNode = $(node).find('div.post-title h3 a');
+            const title = titleNode.text().trim();
+            const href = titleNode.attr('href');
+            const id = href?.split('/').filter(x => x.length > 0).pop();
+            const image = $(node).find('img').attr('src') ?? '';
+
+            if (id && title) {
+                results.push({
+                    mangaId: id,
+                    title: title,
+                    imageUrl: image,
+                    subtitle: 'Italiano'
+                });
             }
         }
-        return results;
-    }
 
-    // Populates the title details
-    async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        for (let i = 0; i < content.length; i++) {
-            const manga = content[i];
-            if (!manga) continue;
-            if (mangaId == manga.titleId) {
-                let contentRating: ContentRating;
-                switch (manga.contentRating) {
-                    case "ADULT":
-                        contentRating = ContentRating.ADULT;
-                        break;
-                    case "MATURE":
-                        contentRating = ContentRating.MATURE;
-                        break;
-                    default:
-                        contentRating = ContentRating.EVERYONE;
-                        break;
-                }
-
-                const genres: TagSection = {
-                    id: "genres",
-                    title: "Genres",
-                    tags: [],
-                };
-                for (let j = 0; j < manga.genres.length; j++) {
-                    const genre = manga.genres[j];
-                    if (!genre) continue;
-                    const tagItem: Tag = {
-                        id: genre.toLowerCase().replace(" ", "-"),
-                        title: genre,
-                    };
-                    genres.tags.push(tagItem);
-                }
-
-                const tags: TagSection = {
-                    id: "tags",
-                    title: "Tags",
-                    tags: [],
-                };
-                for (let j = 0; j < manga.tags.length; j++) {
-                    const tag = manga.tags[j];
-                    if (!tag) continue;
-                    const tagItem: Tag = {
-                        id: tag.toLowerCase().replace(" ", "-"),
-                        title: tag,
-                    };
-                    tags.tags.push(tagItem);
-                }
-
-                return {
-                    mangaId,
-                    mangaInfo: {
-                        thumbnailUrl: manga.thumbnailUrl
-                            ? manga.thumbnailUrl
-                            : "",
-                        synopsis: manga.synopsis
-                            ? manga.synopsis
-                            : "No synopsis.",
-                        primaryTitle: manga.primaryTitle
-                            ? manga.primaryTitle
-                            : "Unknown Title",
-                        secondaryTitles: manga.secondaryTitles
-                            ? manga.secondaryTitles
-                            : [],
-                        contentRating,
-                        status: manga.status,
-                        author: manga.author,
-                        rating: manga.rating,
-                        tagGroups: [genres, tags],
-                        artworkUrls: [manga.thumbnailUrl],
-                        shareUrl: manga.url,
-                    },
-                };
-            }
-        }
-        throw new Error("No title with this id exists");
-    }
-
-    // Populates the chapter list
-    async getChapters(
-        sourceManga: SourceManga,
-        sinceDate?: Date,
-    ): Promise<Chapter[]> {
-        // Can be used to only return new chapters. Not used here, instead the whole chapter list gets returned
-        void sinceDate;
-
-        for (let i = 0; i < content.length; i++) {
-            const manga = content[i];
-            if (!manga) continue;
-            if (sourceManga.mangaId == manga.titleId) {
-                const chapters: Chapter[] = [];
-
-                for (let j = 0; j < manga.chapters.length; j++) {
-                    const chaptersData = manga.chapters[j];
-                    if (!chaptersData) continue;
-                    if (chaptersData.chapterId) {
-                        const chapter: Chapter = {
-                            chapterId: chaptersData.chapterId,
-                            sourceManga,
-                            langCode: chaptersData.languageCode
-                                ? chaptersData.languageCode
-                                : "EN",
-                            chapNum: chaptersData.chapterNumber
-                                ? chaptersData.chapterNumber
-                                : j + 1,
-                            title: manga.primaryTitle,
-                            volume: chaptersData.volumeNumber,
-                        };
-                        chapters.push(chapter);
-                    }
-                }
-                return chapters;
-            }
-        }
-        throw new Error("No title with this id exists");
-    }
-
-    // Populates a chapter with images
-    async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
-        for (let i = 0; i < content.length; i++) {
-            const manga = content[i];
-            if (!manga) continue;
-            if (chapter.sourceManga.mangaId == manga.titleId) {
-                for (let j = 0; j < manga.chapters.length; j++) {
-                    const chapterData = manga.chapters[j];
-                    if (!chapterData) continue;
-                    if (chapter.chapterId == chapterData.chapterId) {
-                        const chapterDetails: ChapterDetails = {
-                            id: chapter.chapterId,
-                            mangaId: chapter.sourceManga.mangaId,
-                            pages: chapterData.pages,
-                        };
-                        return chapterDetails;
-                    }
-                }
-                throw new Error("No chapter with this id exists");
-            }
-        }
-        throw new Error("No title with this id exists");
+        return {
+            items: results,
+            metadata: { page: page + 1 }
+        };
     }
 }
 
-export const ContentTemplate = new ContentTemplateExtension();
+export const ContentTemplate = new DigitalTeamExtension();
