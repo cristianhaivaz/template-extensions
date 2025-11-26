@@ -1,5 +1,4 @@
 import { BasicRateLimiter, ContentRating } from "@paperback/types";
-// Correzione 1: Usiamo "import type" per le definizioni
 import type {
     Chapter,
     ChapterDetails,
@@ -19,12 +18,18 @@ import { MainInterceptor } from "./network";
 
 const DOMAIN = "https://dgtread.com";
 
+const HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+    Referer: `${DOMAIN}/`,
+    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+};
+
 type DigitalTeamImplementation = Extension &
     MangaProviding &
     ChapterProviding &
     SearchResultsProviding;
 
-// Correzione 2: Definiamo esattamente cosa c'è nei metadati (niente più "any")
 interface SearchMetadata {
     page?: number;
 }
@@ -51,14 +56,21 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
         return [];
     }
 
-    async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const response = await fetch(`${DOMAIN}/manga/${mangaId}`);
+    async _getHtml(url: string): Promise<cheerio.CheerioAPI> {
+        const response = await fetch(url, { headers: HEADERS });
         const data = await response.text();
-        const $ = cheerio.load(data);
+        return cheerio.load(data);
+    }
+
+    async getMangaDetails(mangaId: string): Promise<SourceManga> {
+        const $ = await this._getHtml(`${DOMAIN}/manga/${mangaId}`);
 
         const title =
             $("div.post-title h1").text().trim() || $("h1").text().trim();
-        const image = $("div.summary_image img").attr("src") || "";
+        const image =
+            $("div.summary_image img").attr("src") ||
+            $("div.summary_image img").attr("data-src") ||
+            "";
         const author =
             $("div.author-content").first().text().trim() || "Unknown";
         const description =
@@ -91,14 +103,25 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
     }
 
     async getChapters(sourceManga: SourceManga): Promise<Chapter[]> {
-        const response = await fetch(`${DOMAIN}/manga/${sourceManga.mangaId}`);
-        const data = await response.text();
-        const $ = cheerio.load(data);
+        let $ = await this._getHtml(`${DOMAIN}/manga/${sourceManga.mangaId}`);
+        let chapterNodes = $("li.wp-manga-chapter");
+
+        if (chapterNodes.length === 0) {
+            const response = await fetch(
+                `${DOMAIN}/manga/${sourceManga.mangaId}/ajax/chapters/`,
+                {
+                    method: "POST",
+                    headers: HEADERS,
+                },
+            );
+            const data = await response.text();
+            $ = cheerio.load(data);
+            chapterNodes = $("li.wp-manga-chapter");
+        }
 
         const chapters: Chapter[] = [];
-        const chapterNodes = $("li.wp-manga-chapter");
-
         let counter = 0;
+
         for (const node of chapterNodes) {
             const titleNode = $(node).find("a");
             const title = titleNode.text().trim();
@@ -115,9 +138,9 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
             let chapNum = 0;
             if (chapNumRegex && chapNumRegex[1])
                 chapNum = Number(chapNumRegex[1]);
-
             if (chapNum === 0) chapNum = counter++;
 
+            // RIMOSSO 'time' che causava l'errore
             chapters.push({
                 chapterId: chapterId,
                 sourceManga: sourceManga,
@@ -130,18 +153,17 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
     }
 
     async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
-        const response = await fetch(
-            `${DOMAIN}/manga/${chapter.sourceManga.mangaId}/${chapter.chapterId}/`,
+        const $ = await this._getHtml(
+            `${DOMAIN}/manga/${chapter.sourceManga.mangaId}/${chapter.chapterId}/?style=list`,
         );
-        const data = await response.text();
-        const $ = cheerio.load(data);
 
         const pages: string[] = [];
         const pageNodes = $("div.page-break img");
 
         for (const page of pageNodes) {
             let url = $(page).attr("src");
-            if (!url) url = $(page).attr("data-src");
+            if (!url || url.includes("data:image"))
+                url = $(page).attr("data-src");
 
             if (url) {
                 pages.push(url.trim());
@@ -155,7 +177,6 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
         };
     }
 
-    // Correzione 3: Usiamo il tipo SearchMetadata qui
     async getSearchResults(
         query: SearchQuery,
         metadata?: SearchMetadata,
@@ -163,9 +184,7 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
         const page = metadata?.page ?? 1;
         const searchUrl = `${DOMAIN}/page/${page}/?s=${encodeURIComponent(query.title ?? "")}&post_type=wp-manga`;
 
-        const response = await fetch(searchUrl);
-        const data = await response.text();
-        const $ = cheerio.load(data);
+        const $ = await this._getHtml(searchUrl);
 
         const results: SearchResultItem[] = [];
         const nodes = $("div.c-tabs-item__content");
@@ -178,7 +197,10 @@ export class DigitalTeamExtension implements DigitalTeamImplementation {
                 ?.split("/")
                 .filter((x) => x.length > 0)
                 .pop();
-            const image = $(node).find("img").attr("src") ?? "";
+            const image =
+                $(node).find("img").attr("src") ||
+                $(node).find("img").attr("data-src") ||
+                "";
 
             if (id && title) {
                 results.push({
