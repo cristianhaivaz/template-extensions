@@ -1,5 +1,5 @@
 {
-  "buildTime": "2025-11-26T22:06:01.293Z",
+  "buildTime": "2025-11-26T22:05:44.325Z",
   "builtWith": {
     "toolchain": "1.0.0-alpha.57",
     "types": "1.0.0-alpha.57"
@@ -10,22 +10,21 @@
   },
   "sources": [
     {
-      "name": "Content Template",
-      "description": "Template that shows the functionality of content providing extensions.",
-      "version": "1.0.0-alpha.3",
+      "name": "DigitalTeam",
+      "description": "Estensione per DigitalTeam (dgtread.com)",
+      "version": "1.0.4",
       "icon": "icon.png",
-      "language": "en",
-      "contentRating": "SAFE",
+      "language": "it",
+      "contentRating": "MATURE",
       "capabilities": 101,
       "badges": [],
       "developers": [
         {
-          "name": "Celarye",
-          "website": "https://celarye.dev",
-          "github": "https://github.com/Celarye"
+          "name": "TuoNome",
+          "website": "https://github.com/cristianhaivaz"
         }
       ],
-      "id": "ContentTemplate"
+      "id": "DigitalTeam"
     }
   ]
 }
